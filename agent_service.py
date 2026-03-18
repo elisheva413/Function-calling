@@ -75,9 +75,28 @@ def agent(query: str):
     מקבלת בקשה מהמשתמש (query), מתייעצת עם GPT, מפעילה פונקציות לפי הצורך, 
     ומחזירה תשובה אנושית.
     """
-    messages = [{"role": "user", "content": query}]
+    # --- השדרוג הענק: ה"שליף" ---
+    # אנחנו מביאים את המשימות הנוכחיות מהזיכרון
+    current_state = todo_service.get_tasks()
     
-    # שולחים ל-GPT את הבקשה יחד עם רשימת הכלים
+    # כותבים לו הוראה ברורה מאחורי הקלעים
+    system_prompt = f"""
+    אתה סוכן חכם לניהול משימות. 
+    שים לב! אלו המשימות שקיימות כרגע במסד הנתונים:
+    {current_state}
+    
+    חובה עליך להסתכל ברשימה הזו כדי למצוא את ה-ID המדויק לפני שאתה מוחק או מעדכן משימה.
+    אם המשתמש אומר "תמחק את הראשונה", תמצא את המשימה הראשונה ברשימה שסיפקתי לך, ותשתמש ב-ID שלה. אל תנחש מספרים!
+    """
+
+    # עכשיו אנחנו שולחים לו קודם את ה"הוראות למפעיל", ורק אז את ההודעה שלך
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": query}
+    ]
+    # -----------------------------
+    
+    # שולחים ל-GPT את הבקשה יחד עם רשימת הכלים (מכאן זה אותו קוד כמו קודם)
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=messages,
@@ -86,18 +105,15 @@ def agent(query: str):
     
     response_message = response.choices[0].message
     
-    # בודקים אם GPT החליט שצריך להפעיל פונקציה
     if response_message.tool_calls:
         messages.append(response_message)
         
-        # עוברים על כל הפונקציות ש-GPT ביקש להפעיל
         for tool_call in response_message.tool_calls:
             function_name = tool_call.function.name
             function_args = json.loads(tool_call.function.arguments)
             
             print(f"Agent is executing: {function_name} with args: {function_args}")
             
-            # מפעילים את הפונקציה המתאימה מקובץ todo_service
             if function_name == "get_tasks":
                 function_response = todo_service.get_tasks(**function_args)
             elif function_name == "add_task":
@@ -109,7 +125,6 @@ def agent(query: str):
             else:
                 function_response = "Function not found"
             
-            # מחזירים ל-GPT את התוצאה של הפונקציה (ממירים ל-string כדי שלא יקרוס)
             messages.append({
                 "tool_call_id": tool_call.id,
                 "role": "tool",
@@ -117,12 +132,10 @@ def agent(query: str):
                 "content": json.dumps(function_response, ensure_ascii=False) if isinstance(function_response, list) else str(function_response),
             })
         
-        # שולחים שוב ל-GPT כדי שינסח לנו תשובה יפה
         final_response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages
         )
         return final_response.choices[0].message.content
     
-    # אם אין צורך בפונקציות (למשל סתם שיחה רגילה)
     return response_message.content
